@@ -62,14 +62,85 @@ def get_site_feedback():
         return jsonify({"error": "URL is required"}), 400
 
     url = data["url"]
-    soup = BeautifulSoup(requests.get(url).content, "html.parser")
-    title = soup.title.string
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Chrome/120.0.0.0 Safari/537.36"
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        soup = BeautifulSoup(response.content, "html.parser")
+    except Exception as e:
+        return jsonify({"error": "Failed to fetch the website"}), 500
+     # -------------------------
+    # Accessibility Checks
+    # -------------------------
+    issues = {
+        "missing_alt": 0,
+        "missing_labels": 0,
+        "multiple_h1": 0,
+        "empty_links": 0,
+    }
+    # missing Alt Text
+    image_alt = soup.find_all("img", alt=False)
+    issues["missing_alt"] = len(image_alt)
+    
+    # Inputs without labels
+    inputs = soup.find_all("input")
+    for input_tag in inputs:
+        if not input_tag.get("aria-label") and not input_tag.get("id") or not soup.find("label", {"for": input_tag.get("id")}):
+            issues["missing_labels"] += 1
+
+    # Multiple H1 Tags
+    
     h1_tags = soup.find_all("h1")
     h1_texts = [h1.get_text(strip=True) for h1 in h1_tags]
+    if len(h1_tags) > 1:
+        issues["multiple_h1"] = len(h1_tags) - 1
+
+    # Site Title
+    if soup.title:
+        title = soup.title.string.strip()
+    else:
+        title = "No Title Found"
+    
+
+    # Empty links
+    links = soup.find_all("a")
+    for link in links:
+        text = link.get_text(strip=True)
+        aria = link.get("aria-label")
+
+        img = link.find("img")
+        img_alt = img.get("alt") if img else None
+
+        if not text and not aria and not img_alt:
+            issues["empty_links"] += 1
+    
+    weights = {
+        "missing_alt": 5,       # moderate
+        "missing_labels": 8,    # critical
+        "multiple_h1": 3,       # minor
+        "site_title": 2,        # minor
+        "empty_links": 4        # moderate
+    }
+
+    total_penalty = sum(issues[key] * weights[key] for key in issues)
+
+    score = max(0, 100 - total_penalty)
+
+    # Severity breakdown (for charts)
+    severity = {
+        "critical": issues["missing_labels"],
+        "moderate": issues["missing_alt"] + issues["empty_links"],
+        "minor": issues["multiple_h1"]
+    }
+
     return jsonify({
         "title": title,
-        "h1_texts": h1_texts,
-        "h1_count": len(h1_tags)
+        "score": score,
+        "issues": issues,
+        "severity": severity,
+        "h1_count": len(h1_tags),
+        "h1_texts": h1_texts
     }), 200
 
 if __name__ == "__main__":
